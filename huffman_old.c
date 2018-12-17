@@ -1,0 +1,460 @@
+/* Huffman coding
+ *
+ * 15-122 Principles of Imperative Computation
+ */
+
+#include <stdlib.h>
+#include <stdbool.h>
+#include <stdio.h>
+#include <string.h>
+#include <assert.h>
+#include <ctype.h>
+
+#include "lib/contracts.h"
+#include "lib/xalloc.h"
+#include "lib/file_io.h"
+#include "lib/heaps.h"
+
+#include "freqtable.h"
+#include "htree.h"
+#include "encode.h"
+#include "bitpacking.h"
+
+// Print error message
+void error(char *msg) {
+  fprintf(stderr, "%s\n", msg);
+  exit(1);
+}
+
+/* in htree.h: */
+/* typedef struct htree_node htree; */
+struct htree_node {
+  symbol_t value;
+  unsigned int frequency;
+  htree *left;
+  htree *right;
+};
+
+/**********************************************/
+/* Task 1: Checking data structure invariants */
+/**********************************************/
+
+/* forward declaration -- DO NOT MODIFY */
+bool is_htree(htree *H);
+
+bool is_htree_leaf(htree *H) {
+  // WRITE ME
+  if(H == NULL) return false;
+  return (H->frequency > 0) && (H->left == NULL) && (H->right == NULL); 
+}
+
+bool is_htree_interior(htree *H) {
+  // WRITE ME
+  if(H == NULL) return false;       // bogus
+  return is_htree(H->left) && is_htree(H->right) && 
+         H->frequency == H->left->frequency + H->right->frequency;  
+}
+
+
+
+bool is_htree(htree *H) {
+  // WRITE ME
+
+  return (H != NULL) && (is_htree_leaf(H) || is_htree_interior(H));  // bogus
+}
+
+
+/********************************************************/
+/* Task 2: Building Huffman trees from frequency tables */
+/********************************************************/
+
+/* for libs/heaps.c */
+bool htree_higher_priority(elem e1, elem e2) {
+  // WRITE ME
+//  (void)e1;     // bogus
+// (void)e2;     // bogus
+  return ((((htree*)e1)->frequency) < (((htree*)e2)->frequency)); // bogus
+}
+
+void fr(elem e1) {
+  // WRITE ME
+//  (void)e1;     // bogus
+// (void)e2;     // bogus
+  
+  htree_free((htree*)e1);
+}
+// build a htree from a frequency table
+htree* build_htree(freqtable_t table) {
+  // WRITE ME
+  REQUIRES(is_freqtable(table));
+
+  pq_t new_pq = pq_new(NUM_SYMBOLS, &htree_higher_priority, &fr);
+  int count = 0;
+
+
+  for(unsigned int i =0; i < NUM_SYMBOLS; i++){
+  ASSERT(i <= NUM_SYMBOLS);
+    if(table[i] !=0 ){
+      htree *tree_new = xmalloc(sizeof(htree));
+      tree_new->value = i;
+      tree_new->frequency = table[i];
+      tree_new->left = NULL;
+      tree_new->right = NULL;
+      pq_add(new_pq, (elem) tree_new);
+      count++;
+    }
+  }
+  if(count < 2){
+    error("fewer than two symbols with non-zero frequency\n");
+  }
+
+  printf("count=%d\n",count);
+  while( count > 1){
+    htree* tree_new = xmalloc(sizeof(htree));
+
+    elem e_left= pq_rem(new_pq);
+    elem e_right= pq_rem(new_pq);
+    tree_new->left = (htree*)e_left;
+    tree_new->right = (htree*)e_right;;
+    tree_new->frequency = ((htree*)e_left)->frequency + ((htree*)e_right)->frequency;
+
+    pq_add(new_pq, (elem) tree_new);    
+    count = count -1;
+
+
+  }
+  elem result = pq_rem(new_pq);
+  ENSURES(is_htree( (htree*) result));
+//  (void)table; // bogus
+  pq_free(new_pq);
+  return (htree*)result; // bogus
+}
+
+
+/*******************************************/
+/*  Task 3: decoding a text                */
+/*******************************************/
+
+// Decode code according to H, putting decoded length in src_len
+
+symbol_t* decode_src(htree *H, bit_t *code, size_t *src_len) {
+
+  REQUIRES(is_htree(H));
+  REQUIRES(code != NULL);
+  REQUIRES(src_len != NULL);
+
+
+  *src_len = 0;
+  bit_t* code_ptr = code;
+  htree* tree_ptr = H;
+  while((*code_ptr) != '\0'){
+ 
+
+    if(is_htree_interior(tree_ptr)){
+      if ( *code_ptr == '1'){
+        tree_ptr = tree_ptr->right;
+        code_ptr++;
+        
+      }
+      else{
+        tree_ptr = tree_ptr->left;
+        code_ptr++;       
+      }
+  
+  }
+    else if(is_htree_leaf(tree_ptr)){
+      (*src_len)++;  
+      tree_ptr = H;
+    }
+
+    else{
+      error("decoding fails\n");
+    }
+  }
+
+  if(is_htree_leaf(tree_ptr)){
+    (*src_len)++;
+  }else{
+    error("decoding fails\n");
+  }
+ 
+  unsigned int count = *src_len;
+  unsigned int itr = 0;
+  symbol_t* result= xmalloc(sizeof(symbol_t)*count);
+
+  htree* tree_ptr_2 = H;
+  bit_t* code_ptr_2 = code;
+  while(*code_ptr_2 != '\0'){
+ 
+    if(!is_htree_leaf(tree_ptr_2)){
+ 
+      if ((*code_ptr_2) == '1'){
+        tree_ptr_2 = tree_ptr_2->right;
+        code_ptr_2++;
+      }
+      else{
+        tree_ptr_2= tree_ptr_2->left;
+        code_ptr_2++;
+      }
+    }else{
+      result[itr] = tree_ptr_2->value; 
+      itr++;
+      tree_ptr_2 = H;
+    }     
+  }
+  result[itr] = tree_ptr_2->value;
+   
+  ENSURES(result != NULL);
+  return result; // bogus
+
+
+//  (void)H; (void)code; (void)src_len;
+//  return NULL;
+}
+
+
+/****************************************************/
+/* Tasks 4: Building code tables from Huffman trees */
+/****************************************************/
+
+
+void htree_to_code(codetable_t C, htree* H, bit_t* b, size_t t){
+
+
+  REQUIRES(C != NULL);
+  REQUIRES(is_htree(H));
+  REQUIRES(b != NULL);
+  REQUIRES(t > 0);
+
+  htree* h_ptr = H;
+
+  if(is_htree_leaf(h_ptr)){
+    free(C[h_ptr->value]);
+    C[h_ptr->value] = b;
+    return;
+  }
+
+  size_t t_right = t;
+  size_t t_left = t;
+
+  t_left++;
+  bit_t* b_left= xmalloc(sizeof(bit_t)*t_left);
+  for(unsigned int i =0; i < t_left-2; i++){
+    b_left[i] = b[i];
+  }
+  b_left[t_left-2]= '0';
+  b_left[t_left-1]= '\0';
+  htree_to_code(C, h_ptr->left, b_left, t_left);
+
+  t_right++;
+  bit_t* b_right = xmalloc(sizeof(bit_t)*t_right);
+  for(unsigned int i =0; i < t_right-2; i++){
+    b_right[i] = b[i];
+  }
+  b_right[t_right-2]= '1';
+  b_right[t_right-1]= '\0';
+  htree_to_code(C, h_ptr->right, b_right, t_right);
+
+  free(b);
+
+
+  ENSURES(is_codetable(C));
+  return;
+}
+
+/////////////////
+
+// Returns code table for characters in H
+
+codetable_t htree_to_codetable(htree *H) {
+ 
+
+  REQUIRES(is_htree(H));
+
+  codetable_t result = xmalloc(sizeof(bitstring_t)*NUM_SYMBOLS);
+
+
+  size_t t = 1;
+
+
+
+  bit_t* b;
+  for(unsigned i = 0 ; i < NUM_SYMBOLS; i++){
+    b = xmalloc(sizeof(bit_t)*t);
+    *b = '\0';
+    result[i] = b;
+  }
+
+  b = xmalloc(sizeof(bit_t)*t);
+  *b = '\0';
+  htree_to_code(result, H, b, t);
+
+  
+  return result;
+
+}
+
+/*******************************************/
+/*  Task 5: Encoding a text                */
+/*******************************************/
+
+// Encodes source according to codetable
+
+bit_t* encode_src(codetable_t table, symbol_t *src, size_t src_len) {
+
+
+  REQUIRES(is_codetable(table));
+  REQUIRES(src != NULL);
+
+  size_t bit_len = 1;
+
+  for(size_t i = 0; i < src_len; i++){
+    if( ( *table[src[i]] ) == '\0'){
+      error("symbol not found in codetable\n");
+    }
+    else{
+      unsigned int count = 0;
+      while( table[src[i]][count] != '\0' ){
+        count++;
+      }
+      bit_len = count + bit_len;            
+    }
+  }
+
+  bit_t* b = xmalloc(sizeof(bit_t)*bit_len);
+
+  size_t m = 0;
+
+  size_t j = 0;
+  
+  while(m < bit_len-1){
+    while(j < src_len){
+      size_t n = 0;
+      while( (table[src[j]])[n] != '\0'){
+    
+        b[m] = (table[src[j]])[n];
+        n++;
+        m++;
+      }
+      j++;
+    }
+  }
+  b[bit_len-1] = '\0';
+
+  ENSURES(is_bitstring(b));
+  return b; 
+
+
+//  (void)table; (void)src; (void)src_len;
+//  return NULL;
+}
+
+
+/**************************************************/
+/*  Task 6: Building a frequency table from file  */
+/**************************************************/
+
+// Build a frequency table from a source file (or STDIN)
+
+
+freqtable_t build_freqtable(char *fname) {
+
+  REQUIRES(fname != NULL);
+  freqtable_t fre = xcalloc(sizeof(unsigned int), NUM_SYMBOLS);
+
+  FILE* f = fopen(fname, "r"); 
+  int c;
+  while(  (c =fgetc(f)) ){
+    if(c == EOF) break;
+    (fre[c])++; 
+  } 
+  
+
+  fclose(f);
+
+  ENSURES(is_freqtable(fre));
+  return fre; 
+
+//  (void)fname;
+//  return NULL;
+}
+
+
+
+/************************************************/
+/*  Task 7: Packing and unpacking a bitstring   */
+/************************************************/
+
+// Pack a string of bits into an array of bytes; length = strlen(bits)/8
+
+
+uint8_t* pack(bit_t *bits) {
+
+  REQUIRES(bits != NULL);
+  size_t bit_count = 0;
+
+  while(bits[bit_count] != '\0'){
+    bit_count++;
+  }
+  unsigned int m = bit_count/8;
+  unsigned int n = bit_count%8;
+  unsigned int ct = 0;
+
+  uint8_t* result;
+  if(n == 0){
+    result = xcalloc(sizeof(uint8_t),m);
+  }else{
+    result = xcalloc(sizeof(uint8_t),(m+1));
+  }
+
+  while(ct < m){
+    for(unsigned int i = 0; i < 8; i++){
+      if(bits[i+ct*8] == '1'){
+        result[ct] = result[ct]+(1<<(7-i));
+      }
+    }
+    ct++;
+  }
+
+  for(unsigned int j = 8*m; j < bit_count; j++){
+      if(bits[j] == '1'){
+        result[m] = result[m] + (1<< (7-(j-8*m)));
+      } 
+    }
+  return result;
+
+
+//  (void)bits;
+//  return NULL;
+}
+
+// Unpack an array of bytes c of length len into a NUL-terminated string of ASCII bits
+
+bit_t* unpack(uint8_t *c, size_t len) {
+
+  size_t bit_len = 8*len + 1;
+  bit_t* result = xmalloc(sizeof(bit_t)*bit_len);
+
+  size_t ib;
+  for(ib = 0; ib < len; ib++){
+    uint8_t byte_ib = c[ib];
+    size_t pos_ib = ib*8;
+    for(int m = 0; m < 8; m++){
+      if( ( (byte_ib>>(7-m)) & 1 ) == 1){
+        result[ pos_ib + m] = '1';
+      }
+      else{
+        result[ pos_ib + m] = '0';
+      }
+    }
+  }
+
+
+  result[bit_len-1] = '\0';
+  return result;         // bogus
+
+
+//  (void)c; (void)len;
+//  return NULL;
+}
+
